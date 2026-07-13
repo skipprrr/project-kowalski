@@ -133,7 +133,7 @@ def parse_time(text: str, now: datetime | None = None) -> TimeResult:
 
     # ── RELATIVE: "in 30 minutes" / "in 2 hours" / "in 3 days" ───
     m = re.search(
-        r"\bin\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours|day|days|week|weeks)\b",
+        r"\b(?:in|after)\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours|day|days|week|weeks)\b",
         low,
     )
     if m:
