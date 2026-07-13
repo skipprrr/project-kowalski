@@ -578,3 +578,64 @@ kbd {
 
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 .pulse { animation: pulse 1.5s ease-in-out infinite; }
+@media (max-width: 768px) {
+  :root { --sidebar-w: 0px; }
+
+  .layout { flex-direction: column; }
+
+  .sidebar {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .sidebar-logo { display: none; }
+
+  .nav-section {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 2px;
+    padding: 0;
+    margin: 0;
+  }
+
+  .nav-label { display: none; }
+
+  .nav-item {
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    font-size: 10px;
+    min-width: 52px;
+    text-align: center;
+  }
+
+  .nav-item .badge { display: none; }
+
+  .main { overflow-y: auto; }
+
+  .page {
+    padding: 16px;
+  }
+
+  .stat-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .entity-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .money-table th:nth-child(4),
+  .money-table td:nth-child(4) { display: none; }
+
+  .palette { width: 92vw; }
+
+  .overlay { padding-top: 8vh; }
+}
