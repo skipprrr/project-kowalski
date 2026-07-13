@@ -83,7 +83,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* ── Sidebar ── */}
           <nav className="sidebar">
             <div className="sidebar-logo">
-              <div className="sidebar-logo-icon">🦊</div>
+              <div className="sidebar-logo-icon">🧠</div>
               <span className="sidebar-logo-text">Kowalski</span>
             </div>
 
