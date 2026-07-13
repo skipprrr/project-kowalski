@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import type { Counts } from '@/lib/api'
+import { Target, FolderOpen, Heart, BookMarked } from 'lucide-react'
 
 const NAV = [
   { href: '/',           icon: LayoutDashboard, label: 'Dashboard',  key: null },
@@ -22,6 +23,10 @@ const NAV = [
   { href: '/money',      icon: Wallet,          label: 'Money',      key: null },
   { href: '/search',     icon: Search,          label: 'Search',     key: null },
   { href: '/settings',   icon: Settings,        label: 'Settings',   key: null },
+  { href: '/skills',   icon: Target,     label: 'Skills',   key: null },
+  { href: '/projects', icon: FolderOpen,  label: 'Projects', key: null },
+  { href: '/health',   icon: Heart,       label: 'Health',   key: null },
+  { href: '/reading',  icon: BookMarked,  label: 'Reading',  key: null },
 ]
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
