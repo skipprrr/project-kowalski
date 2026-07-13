@@ -9,13 +9,15 @@ Local dev:   uvicorn main:app --reload --port 8000
 Vercel:      this file is the entry point (see vercel.json)
 """
 from __future__ import annotations
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
 
 import logging
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Any
 
 from core import config
 from core.kowalski import handle as kowalski_handle
@@ -53,7 +55,6 @@ async def webhook(request: Request) -> Response:
 
     body = await request.body()
 
-    # Signature check — only reject if header present but wrong
     secret = hashlib.sha256(config.TELEGRAM_BOT_TOKEN.encode()).digest()
     sig = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     if sig:
@@ -66,8 +67,7 @@ async def webhook(request: Request) -> Response:
         update = Update.de_json(data, _tg_app.bot)
         await _tg_app.initialize()
         await _tg_app.process_update(update)
-    except Exception as e:                    # noqa: BLE001
-        # Never return non-200 to Telegram — it retries forever
+    except Exception as e:
         log.error("webhook error: %s", e, exc_info=True)
 
     return Response(status_code=200)
@@ -82,7 +82,7 @@ def health() -> dict:
 
 
 # ════════════════════════════════════════════════════════════════
-#  HANDLE  (dashboard quick-add + command palette)
+#  HANDLE
 # ════════════════════════════════════════════════════════════════
 class HandleRequest(BaseModel):
     text: str
