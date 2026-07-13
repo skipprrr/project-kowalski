@@ -16,7 +16,7 @@ export default function Search() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    clearTimeout(timer.current)
+    if (timer.current) clearTimeout(timer.current)
     if (!q.trim()) { setResults([]); setSearched(false); return }
     timer.current = setTimeout(async () => {
       setLoading(true)
