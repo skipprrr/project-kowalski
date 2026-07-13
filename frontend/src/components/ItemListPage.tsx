@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { Trash2 } from 'lucide-react'
+import { Trash2, Check, X } from 'lucide-react'
 import { api, type Item, type ItemType } from '@/lib/api'
 import { fmtShort, isOverdue } from '@/lib/time'
 
@@ -18,6 +18,8 @@ export default function ItemListPage({ type, title, icon, emptyText, showCheck =
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
 
   const load = useCallback(async () => {
     const r = await api.items({ type, status: 'open' })
@@ -50,6 +52,23 @@ export default function ItemListPage({ type, title, icon, emptyText, showCheck =
   async function del(id: string) {
     await api.deleteItem(id)
     setItems(prev => prev.filter(i => i.id !== id))
+  }
+
+  function startEdit(item: Item) {
+    setEditingId(item.id)
+    setEditText(item.content)
+  }
+
+  async function saveEdit(id: string) {
+    if (!editText.trim()) return
+    await api.handle(`edit: ${items.find(i => i.id === id)?.content} → ${editText}`)
+    setEditingId(null)
+    await load()
+  }
+
+  function cancelEdit() {
+    setEditingId(null)
+    setEditText('')
   }
 
   return (
@@ -92,13 +111,55 @@ export default function ItemListPage({ type, title, icon, emptyText, showCheck =
       {!loading && items.length > 0 && (
         <div className="item-list">
           {items.map(item => (
-            <div key={item.id} className={`item-row item-priority-${item.priority}`}
-              style={{ '--hover-actions': 'visible' } as React.CSSProperties}>
+            <div
+              key={item.id}
+              className={`item-row item-priority-${item.priority}`}
+            >
               {showCheck && (
                 <button className="item-check" onClick={() => done(item.id)} title="Mark done" />
               )}
+
               <div className="item-content">
-                <div className="item-text">{item.content}</div>
+                {editingId === item.id ? (
+                  /* ── Inline edit mode ── */
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      value={editText}
+                      onChange={e => setEditText(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') saveEdit(item.id)
+                        if (e.key === 'Escape') cancelEdit()
+                      }}
+                      autoFocus
+                      style={{ flex: 1, padding: '4px 8px', fontSize: 13 }}
+                    />
+                    <button
+                      className="btn btn-primary"
+                      style={{ padding: '4px 8px' }}
+                      onClick={() => saveEdit(item.id)}
+                    >
+                      <Check size={13} />
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ padding: '4px 8px' }}
+                      onClick={cancelEdit}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  /* ── Normal display mode ── */
+                  <div
+                    className="item-text"
+                    onClick={() => startEdit(item)}
+                    title="Click to edit"
+                    style={{ cursor: 'text' }}
+                  >
+                    {item.content}
+                  </div>
+                )}
+
                 <div className="item-meta">
                   {item.due_at && (
                     <span className={`item-time ${isOverdue(item.due_at) ? 'overdue' : ''}`}>
@@ -114,16 +175,20 @@ export default function ItemListPage({ type, title, icon, emptyText, showCheck =
                   )}
                 </div>
               </div>
-              <button
-                className="btn btn-danger"
-                style={{ opacity: 0, transition: 'opacity 0.1s', padding: '4px 8px' }}
-                onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-                onMouseLeave={e => (e.currentTarget.style.opacity = '0')}
-                onClick={() => del(item.id)}
-                title="Delete"
-              >
-                <Trash2 size={13} />
-              </button>
+
+              {/* Delete button — appears on hover */}
+              {editingId !== item.id && (
+                <button
+                  className="btn btn-danger"
+                  style={{ opacity: 0, transition: 'opacity 0.1s', padding: '4px 8px', flexShrink: 0 }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '0')}
+                  onClick={() => del(item.id)}
+                  title="Delete"
+                >
+                  <Trash2 size={13} />
+                </button>
+              )}
             </div>
           ))}
         </div>

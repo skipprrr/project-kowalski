@@ -1,11 +1,9 @@
 """
-Telegram handler — with inline buttons and snooze.
+Telegram handler — v2.2 (chunk 3)
 
-Changes from v1:
-- Reminders now arrive with ✅ Done and ⏰ Snooze 1h buttons
-- Tapping a button completes or snoozes the reminder
-- "snooze 1h" / "snooze 2h" etc. work as text commands too
-- "add person: X" / "add business: X" create entities
+Added:
+- remove person/business: Name — delete an entity
+- Partial money settlement: "Fatima paid back 200"
 """
 from __future__ import annotations
 
@@ -30,12 +28,12 @@ from models import entities, items
 
 log = logging.getLogger("kowalski.telegram")
 
-# ── Auth ────────────────────────────────────────────────────────
+
 def _authorised(update: Update) -> bool:
     uid = str(update.effective_user.id) if update.effective_user else ""
     return uid == config.TELEGRAM_CHAT_ID
 
-# ── Helpers ─────────────────────────────────────────────────────
+
 async def _reply(update: Update, text: str, reply_markup=None) -> None:
     try:
         await update.message.reply_text(
@@ -44,14 +42,38 @@ async def _reply(update: Update, text: str, reply_markup=None) -> None:
     except Exception:                          # noqa: BLE001
         await update.message.reply_text(text, reply_markup=reply_markup)
 
-# ── Snooze parser ────────────────────────────────────────────────
+
+# ── Patterns ────────────────────────────────────────────────────
 SNOOZE_RE = re.compile(
     r"^snooze\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$",
     re.I,
 )
 
+ENTITY_CREATE_RE = re.compile(
+    r"^(?:add|create|new)\s+(person|contact|business|client|friend|family|project|place)\s*[:\-]?\s*(.+)$",
+    re.I | re.S,
+)
+
+ENTITY_REMOVE_RE = re.compile(
+    r"^(?:remove|delete)\s+(person|business|contact|client|entity)\s*[:\-]?\s*(.+)$",
+    re.I | re.S,
+)
+
+# "Fatima paid back 200" / "Fatima paid 200"
+PARTIAL_SETTLE_RE = re.compile(
+    r"^(.+?)\s+paid(?:\s+back)?\s+(?:tk\.?|bdt|৳|\$)?\s*([\d,]+(?:\.\d+)?)$",
+    re.I,
+)
+
+KIND_MAP = {
+    "person": "person", "contact": "person", "friend": "person",
+    "family": "person", "client": "person",
+    "business": "business", "company": "business",
+    "project": "project", "place": "place",
+}
+
+
 def _parse_snooze(text: str):
-    """Return timedelta or None."""
     from datetime import timedelta
     m = SNOOZE_RE.match(text.strip())
     if not m:
@@ -63,20 +85,8 @@ def _parse_snooze(text: str):
         return timedelta(hours=n)
     return timedelta(days=n)
 
-# ── Entity creation shortcut ─────────────────────────────────────
-ENTITY_RE = re.compile(
-    r"^(?:add|create|new)\s+(person|contact|business|client|friend|family|project|place)\s*[:\-]?\s*(.+)$",
-    re.I | re.S,
-)
 
-KIND_MAP = {
-    "person": "person", "contact": "person", "friend": "person",
-    "family": "person", "client": "person",
-    "business": "business", "company": "business",
-    "project": "project", "place": "place",
-}
-
-# ── Handlers ─────────────────────────────────────────────────────
+# ── Handlers ────────────────────────────────────────────────────
 async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _authorised(update):
         return
@@ -87,11 +97,13 @@ async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• `task: fix the printer`\n"
         "• `note: passport in top drawer`\n"
         "• `Fatima owes me 500`\n"
+        "• `Fatima paid back 200` — partial settlement\n"
         "• `add person: Rahim`\n"
-        "• `add business: Corner Cafe`\n"
+        "• `remove person: Rahim`\n"
+        "• `edit: old text → new text`\n"
+        "• `delete last` / `delete: item name`\n"
         "• `snooze 1h` — after a reminder fires\n"
-        "• `done` — complete latest task\n"
-        "• `today` / `search X`"
+        "• `done` / `today` / `search X`"
     ))
 
 
@@ -108,7 +120,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # ── Snooze ───────────────────────────────────────────────────
     delta = _parse_snooze(text)
     if delta:
-        # Find the most recent open reminder
         res = (
             db().table("items").select("*")
             .eq("type", "reminder").eq("status", "open")
@@ -117,8 +128,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         if res.data:
             item = res.data[0]
-            from core.timeutil import now_utc, to_utc
-            from datetime import timezone
             new_due = now_utc() + delta
             db().table("items").update({
                 "due_at": iso(new_due),
@@ -132,8 +141,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await _reply(update, "No recent reminder to snooze.")
         return
 
-    # ── Entity creation ──────────────────────────────────────────
-    em = ENTITY_RE.match(text)
+    # ── Entity create ────────────────────────────────────────────
+    em = ENTITY_CREATE_RE.match(text)
     if em:
         raw_kind, name = em.group(1).lower(), em.group(2).strip()
         kind = KIND_MAP.get(raw_kind, "person")
@@ -145,17 +154,107 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await _reply(update, f"✅ Created *{ent['name']}* as a {kind}.")
         return
 
-    # ── Everything else → core handler ──────────────────────────
+    # ── Entity remove ────────────────────────────────────────────
+    rm = ENTITY_REMOVE_RE.match(text)
+    if rm:
+        name = rm.group(2).strip()
+        ent = entities.resolve(name)
+        if not ent:
+            await _reply(update, f'Couldn\'t find anyone matching "{name}".')
+        else:
+            entities.soft_delete(ent["id"])
+            await _reply(update, f"🗑 Removed *{ent['name']}* from your people.")
+        return
+
+    # ── Partial money settlement ─────────────────────────────────
+    pm = PARTIAL_SETTLE_RE.match(text)
+    if pm:
+        person_name = pm.group(1).strip()
+        amount = float(pm.group(2).replace(",", ""))
+        ent = entities.resolve(person_name)
+        if not ent:
+            await _reply(update, f'No entity found matching "{person_name}". Try "add person: {person_name}" first.')
+            return
+
+        # Find pending they_owe_me records for this entity
+        res = (
+            db().table("money").select("*")
+            .eq("entity_id", ent["id"])
+            .eq("direction", "they_owe_me")
+            .eq("status", "pending")
+            .is_("deleted_at", "null")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        if not res.data:
+            await _reply(update, f"{ent['name']} has no pending money owed to you.")
+            return
+
+        # Apply partial payment — reduce oldest record first
+        remaining = amount
+        settled = []
+        partially_reduced = []
+
+        for rec in res.data:
+            if remaining <= 0:
+                break
+            rec_amount = float(rec["amount"])
+            if remaining >= rec_amount:
+                # Fully settle this record
+                db().table("money").update({
+                    "status": "settled",
+                    "settled_at": iso(now_utc()),
+                }).eq("id", rec["id"]).execute()
+                settled.append(rec_amount)
+                remaining -= rec_amount
+            else:
+                # Partially reduce
+                db().table("money").update({
+                    "amount": rec_amount - remaining,
+                }).eq("id", rec["id"]).execute()
+                # Log the partial payment as a new settled record
+                db().table("money").insert({
+                    "entity_id": ent["id"],
+                    "person_text": ent["name"],
+                    "direction": "they_owe_me",
+                    "amount": remaining,
+                    "currency": rec.get("currency", "BDT"),
+                    "note": f"partial payment",
+                    "status": "settled",
+                    "settled_at": iso(now_utc()),
+                }).execute()
+                partially_reduced.append(remaining)
+                remaining = 0
+
+        # Check new balance
+        bal_res = (
+            db().table("money").select("amount")
+            .eq("entity_id", ent["id"])
+            .eq("direction", "they_owe_me")
+            .eq("status", "pending")
+            .is_("deleted_at", "null")
+            .execute()
+        )
+        new_balance = sum(float(r["amount"]) for r in (bal_res.data or []))
+
+        if new_balance > 0:
+            await _reply(update,
+                f"💰 {ent['name']} paid ৳{amount:,.0f}.\n"
+                f"Still owes: ৳{new_balance:,.0f}")
+        else:
+            await _reply(update,
+                f"✅ {ent['name']} is fully settled. All clear!")
+        return
+
+    # ── Everything else → core ───────────────────────────────────
     response = handle(text, source="telegram")
     log.info("→ %s", response.text[:80])
     await _reply(update, response.text)
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle inline button taps (✅ Done, ⏰ Snooze)."""
     query = update.callback_query
     await query.answer()
-
     if not query.data:
         return
 
@@ -168,9 +267,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await query.edit_message_text("Already marked done.")
 
     elif query.data.startswith("snooze1h:"):
-        item_id = query.data[9:]
         from datetime import timedelta
-        from core.timeutil import now_utc
+        item_id = query.data[9:]
         new_due = now_utc() + timedelta(hours=1)
         db().table("items").update({
             "due_at": iso(new_due),
@@ -185,7 +283,6 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.error("telegram error: %s", context.error, exc_info=context.error)
 
 
-# ── App builder ──────────────────────────────────────────────────
 def build_app() -> Application:
     app = (
         Application.builder()
