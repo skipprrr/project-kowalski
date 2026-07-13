@@ -1,17 +1,10 @@
 """
-KOWALSKI CORE.
+KOWALSKI CORE — v2.1
 
-    handle(text) -> Response
-
-That's the whole public API. One function.
-
-Telegram calls it. FastAPI calls it. The CLI calls it. A voice app,
-one day, will call it. None of them contain a single line of business
-logic, and none of them ever will — because every one of them is just
-a translator between some transport and this function.
-
-This is what "one core, many interfaces" actually means in practice.
-Add a new interface tomorrow and there is nothing to duplicate.
+Added in chunk 2:
+- edit: [search] → [new content]
+- delete last
+- delete: [search term]
 """
 from __future__ import annotations
 
@@ -29,9 +22,9 @@ log = logging.getLogger("kowalski")
 
 @dataclass
 class Response:
-    text: str                                   # what a human should read
+    text: str
     ok: bool = True
-    data: dict[str, Any] = field(default_factory=dict)   # what a machine should read
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 ICON = {
@@ -41,34 +34,90 @@ ICON = {
 
 _FORGET_RE = re.compile(r"^(don'?t|do not)\s+forget\s+", re.I)
 
+# ── Edit pattern: "edit: printer → fix the printer urgently"
+EDIT_RE = re.compile(
+    r"^edit\s*:\s*(.+?)\s*[→\->]+\s*(.+)$",
+    re.I | re.S,
+)
+
+# ── Delete patterns
+DELETE_LAST_RE = re.compile(r"^delete\s+last$", re.I)
+DELETE_RE = re.compile(r"^delete\s*:\s*(.+)$", re.I)
+
 
 def handle(text: str, source: str = "telegram") -> Response:
-    """The front door. Everything comes through here."""
-    p = understand(text)
+    raw = text.strip()
+
+    # ── Edit ────────────────────────────────────────────────────
+    m = EDIT_RE.match(raw)
+    if m:
+        return _edit(m.group(1).strip(), m.group(2).strip())
+
+    # ── Delete last ─────────────────────────────────────────────
+    if DELETE_LAST_RE.match(raw):
+        return _delete_last()
+
+    # ── Delete by search ────────────────────────────────────────
+    m = DELETE_RE.match(raw)
+    if m:
+        return _delete_search(m.group(1).strip())
+
+    # ── Normal flow ─────────────────────────────────────────────
+    p = understand(raw)
     log.info("intent=%s parsed_by=%s conf=%.1f", p.intent, p.parsed_by, p.confidence)
 
-    if p.intent == "today":
-        return _today()
-    if p.intent == "done":
-        return _done(p)
-    if p.intent == "search":
-        return _search(p)
-    if p.intent == "list":
-        return _list(p)
-    if p.intent == "money":
-        return _money(p, source)
+    if p.intent == "today":   return _today()
+    if p.intent == "done":    return _done(p)
+    if p.intent == "search":  return _search(p)
+    if p.intent == "list":    return _list(p)
+    if p.intent == "money":   return _money(p, source)
 
     if p.intent in ("task", "reminder", "note", "idea", "journal"):
         return _capture(p, source)
 
-    # Should be unreachable — the router degrades to "note" — but if
-    # it ever happens, we still keep the text.
     item = items.create(
-        type="note", content=text, raw_input=text,
+        type="note", content=raw, raw_input=raw,
         source=source, parsed_by="fallback",
     )
-    return Response("📝 Saved as a note (couldn't parse it).",
-                    data={"item": item})
+    return Response("📝 Saved as a note (couldn't parse it).", data={"item": item})
+
+
+# ═══════════════════════════════════════════════════════════════
+#  EDIT
+# ═══════════════════════════════════════════════════════════════
+def _edit(search: str, new_content: str) -> Response:
+    hits = items.search(search, limit=1)
+    open_hits = [h for h in hits if h["status"] == "open"]
+    if not open_hits:
+        return Response(f'Couldn\'t find an open item matching "{search}".', ok=False)
+    item = items.update(open_hits[0]["id"], content=new_content)
+    return Response(f"✏️ Updated — {new_content}", data={"item": item})
+
+
+# ═══════════════════════════════════════════════════════════════
+#  DELETE
+# ═══════════════════════════════════════════════════════════════
+def _delete_last() -> Response:
+    res = (
+        __import__("core.db", fromlist=["db"]).db()
+        .table("items").select("*")
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True).limit(1).execute()
+    )
+    if not res.data:
+        return Response("Nothing to delete.", ok=False)
+    item = res.data[0]
+    items.soft_delete(item["id"])
+    return Response(f"🗑 Deleted — {item['content']}")
+
+
+def _delete_search(search: str) -> Response:
+    hits = items.search(search, limit=1)
+    if not hits:
+        return Response(f'Nothing found matching "{search}".', ok=False)
+    item = hits[0]
+    items.soft_delete(item["id"])
+    return Response(f"🗑 Deleted — {item['content']}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -109,7 +158,6 @@ def _capture(p, source: str) -> Response:
     if p.priority:
         lines.append("❗" * p.priority)
 
-    # Honesty beats a silent wrong guess.
     if p.intent == "reminder" and not item.get("due_at"):
         lines.append("⚠️ No time found — saved, but it won't ping you.")
 
@@ -144,10 +192,8 @@ def _today() -> Response:
         out.append("📋 *Open tasks*")
         out += [f"  • {t['content']}" for t in tasks[:7]]
 
-    return Response(
-        "\n".join(out).strip(),
-        data={"today": due, "overdue": late, "tasks": tasks},
-    )
+    return Response("\n".join(out).strip(),
+                    data={"today": due, "overdue": late, "tasks": tasks})
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -158,7 +204,7 @@ def _done(p) -> Response:
         hits = items.search(p.content, limit=1)
         open_hits = [h for h in hits if h["status"] == "open"]
         if not open_hits:
-            return Response(f"Couldn't find an open item matching \"{p.content}\".", ok=False)
+            return Response(f'Couldn\'t find an open item matching "{p.content}".', ok=False)
         item = items.complete(open_hits[0]["id"])
     else:
         item = items.complete_latest("task")
@@ -177,7 +223,7 @@ def _done(p) -> Response:
 def _search(p) -> Response:
     hits = items.search(p.content, limit=10)
     if not hits:
-        return Response(f"Nothing found for \"{p.content}\".", ok=False)
+        return Response(f'Nothing found for "{p.content}".', ok=False)
 
     lines = [f"🔍 *{p.content}* — {len(hits)} result(s)\n"]
     for h in hits:
