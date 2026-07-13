@@ -13,7 +13,7 @@ export default function Search() {
   const [results, setResults] = useState<Item[]>([])
   const [searched, setSearched] = useState(false)
   const [loading, setLoading] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>()
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     clearTimeout(timer.current)
